@@ -50,6 +50,10 @@ python user_auth/selftest.py    # 模式 B
 
 `userstore.py` 是 Python 的，但规则可以照搬：用第五节接口表定契约，用 `ROLE_META` 定角色，用 `audit_user_change` 的字段结构建审计表。前端那套 `web/` 是纯 HTML+CSS+JS，可以直接当账号中心页面用。
 
+### 让别的项目的 AI 帮你接
+
+直接复制 [`USAGE_PROMPT.md`](USAGE_PROMPT.md) 里那段提示词，粘到目标项目的会话里即可。它自带仓库地址、模式判断、命令、验收标准和五条禁止事项，不依赖任何上下文。
+
 ---
 
 ## 一、为什么这样分层
