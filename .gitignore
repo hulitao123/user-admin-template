@@ -2,5 +2,8 @@ data/*.db
 data/*.db-wal
 data/*.db-shm
 data/.secret
+.workbuddy/
 __pycache__/
 *.pyc
+.venv/
+venv/
