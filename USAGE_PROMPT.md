@@ -2,51 +2,68 @@
 
 仓库：https://github.com/hulitao123/user-admin-template （公开）
 
-- 已有用户管理 → 用提示词 A（对照审查，只修有问题的）
-- 新项目 / 要整套后台 → 用提示词 B
+直接复制全文，粘到目标项目的 AI 会话里。不依赖任何上下文。
 
 ---
 
-## 提示词 A · 对照审查
-
 ```
-参考仓库：https://github.com/hulitao123/user-admin-template
-
-本项目已有用户管理，不要推倒重来，也不要换技术栈。
-先对照它审查现有实现，再决定改哪里。
-
-逐条查，输出差异清单（有问题 / 可接受 / 它不如我们）：
-1. 密码存储：明文、MD5 或无盐 SHA256 → 有问题
-2. 会话撤销：改密码、禁用账号后旧 token 还能用 → 有问题
-3. 越权：非管理角色直接调管理接口能被通过 → 有问题（前端藏菜单不算拦住）
-4. 后门：存在跳过密码校验的开关、命令行改密/解锁工具 → 有问题
-5. 审计：账号变更记录能被 UPDATE / DELETE 改掉 → 有问题
-6. 锁死：最后一个管理员能被删、禁用或降级 → 有问题
-
-这 6 项必须全部合格，具体怎么实现你定。
-清单里标「有问题」的必须修，其余部分不要动。
-改完说明：改前什么表现、改后什么表现、怎么验证的。
-```
-
----
-
-## 提示词 B · 直接生成
-
-```
+你的项目要接入一套现成的用户管理底座（账号、密码策略、权限分级、审计追踪）。
 仓库：https://github.com/hulitao123/user-admin-template
+按以下步骤执行，不要自己重写一套账号系统。
 
-git clone --depth 1 <仓库> <临时目录>   # 不要直接克隆成项目目录
+【1. 判断模式】
+A) 项目还没有账号体系 → full 模式（登录页、个人中心、用户管理、审计）
+B) 已有 Python 后端（FastAPI/Flask/Django），只缺账号能力 → core 模式
+非 Python 项目不用 init 脚本，读仓库 SKILL.md 第四节照接口表实现。
 
-有 Python 后端、只缺账号能力：
-  python <临时目录>/scripts/init.py --target <项目根目录> --mode core
-要一套能跑的后台（登录页 + 个人中心 + 用户管理 + 审计）：
-  python <临时目录>/scripts/init.py --target <项目根目录> --name "<项目名>" --port <端口>
+【2. 克隆到临时目录】
+git clone --depth 1 https://github.com/hulitao123/user-admin-template <临时目录>
+不要直接克隆成项目目录（会带上模板的 git 历史），生成完删掉临时目录。
 
-生成后删掉临时目录，先过自检再写业务代码（期望 88/88）。
+【3. 生成】
+full: python <临时目录>/scripts/init.py --target <项目根目录> --name "<项目名>" --port <端口>
+core: python <临时目录>/scripts/init.py --target <项目根目录> --mode core
 
-集成时别漏：鉴权要校验 token_version，否则改密码踢不掉旧会话；
-登录只走 db.verify_login()，内含失败锁定；审计只通过 db.audit_user_change() 写。
-不要改 app/userstore.py 内部逻辑（八道防锁死保护），不要改 username，不要留密码校验开关。
+【4. 必须验证，全绿才继续】
+full: python tests/selftest.py          期望 88/88
+core: python user_auth/selftest.py      期望 88/88
+不通过就停下报错，不要跳过自检写业务代码。
 
-初始账号 admin / Aa123456，首次登录强制改密。
+【5. 三条硬约束，违反就是安全漏洞】
+1) 鉴权中间件必须校验 token 版本：
+   if not payload or payload["tv"] != db.get_token_version(payload["uid"]): return 401
+   漏了这步，改密、禁用、强制下线都踢不掉已签发的 token。
+2) 不要自己拼 SQL 查密码，只用 db.verify_login(username, pwd, ip)，它内置失败计数与锁定。
+3) 审计只通过 db.audit_user_change(...) 写入，不要直接改审计表。
+
+【6. 绝对不要做】
+- 不要改 app/userstore.py 内部逻辑，八道保护是防锁死的，删一条可能没人能进系统
+- 不要把 data/ 提交进版本库
+- 不要写命令行解锁/改密工具（免登录改账号状态等于后门）
+- 不要改 username（审计关联键），要改改 display_name
+- 不要留「跳过密码校验」的开发开关
+
+【7. 完成标志】
+自检 88/88；初始账号登录被强制改密；普通角色看不到用户管理菜单，直接调 /api/users* 返回 403。
+
+文档：SKILL.md（接口速查、八道保护、三档选型）、README.md（权限矩阵、接口表、GxP 边界）
 ```
+
+---
+
+## 如果你只是想查现有系统的漏洞
+
+项目已经有用户管理、不打算接入这套底座时，用下面这段：
+
+```
+参考 https://github.com/hulitao123/user-admin-template 审查本项目现有用户管理，不要推倒重来。
+逐条查并输出差异清单：密码是否明文/MD5/无盐 SHA256；改密或禁用后旧 token 是否还能用；
+非管理角色直接调管理接口能否通过；有无跳过密码校验的开关或命令行改密工具；
+审计记录能否被 UPDATE/DELETE 改掉；最后一个管理员能否被删、禁用或降级。
+标「有问题」的必须修，其余不要动。改完说明改前表现、改后表现、怎么验证的。
+```
+
+---
+
+初始账号 `admin / Aa123456`，首次登录强制修改。
+三档策略 `lite / standard / gxp`，gxp 档默认密码为 `Aa123456@Init`，同样首登强制改。
