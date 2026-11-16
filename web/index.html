@@ -425,11 +425,15 @@
           <option value="user_lock">自动锁定</option>
           <option value="user_import">批量导入</option>
           <option value="user_export">导出清单</option>
+          <option value="audit_export">导出审计</option>
         </select>
         <input id="auditTarget" placeholder="按账号 / 操作人过滤">
+        <input type="date" id="auditStart" class="date-input" title="起始日期">
+        <span class="date-sep">至</span>
+        <input type="date" id="auditEnd" class="date-input" title="结束日期">
         <button class="btn" id="auditRefresh">查询</button>
-        <span class="flex1"></span>
-        <span class="muted">记录只增不改，数据库触发器兜底</span>
+        <button class="btn" id="auditReset" title="清空全部筛选条件">重置</button>
+        <button class="btn" id="auditExport">导出 CSV</button>
       </div>
       <div class="table-wrap audit-wrap">
         <table class="table compact">
@@ -446,7 +450,15 @@
           <tbody id="auditRows"></tbody>
         </table>
       </div>
-      <div id="auditEmpty" class="empty hidden"><p>暂无审计记录</p></div>
+      <div id="auditEmpty" class="empty hidden"><p>当前条件下没有审计记录</p></div>
+      <div class="audit-pager">
+        <span class="muted" id="auditTotal">–</span>
+        <span class="flex1"></span>
+        <button class="btn sm" id="auditPrev" disabled>上一页</button>
+        <span class="pager-info" id="auditPageInfo">1 / 1</span>
+        <button class="btn sm" id="auditNext" disabled>下一页</button>
+      </div>
+      <p class="audit-note">记录只增不改，数据库触发器兜底；导出动作本身也会被记入审计。</p>
     </div>
     <div class="modal-foot"><button class="btn" data-close>关闭</button></div>
   </div>

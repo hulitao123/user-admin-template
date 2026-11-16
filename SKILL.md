@@ -19,7 +19,7 @@ description: 复用这套用户管理/账号中心底座做新项目，或把认
 `full` 产出：`app/` `web/` `tests/` `run.bat` `README.md` `.gitignore`，端口和标题会按 `--name`/`--port` 改好，启动即可用。
 `core` 产出：`user_auth/` 下平级的 `userstore.py`、`auth.py`、`selftest.py`，外加一份接入说明。
 
-**做完第一步永远先跑 `selftest.py`**，76 项全绿再写业务代码。它不依赖 Web 层，纯数据层自检，几秒钟出结果。
+**做完第一步永远先跑 `selftest.py`**，88 项全绿再写业务代码。它不依赖 Web 层，纯数据层自检，几秒钟出结果。
 
 ## 二、这套东西的骨架
 
@@ -51,7 +51,9 @@ signer = TokenSigner(secret_path="data/.secret")       # 容器部署务必显�
 | `update_user_fields(id, changes, actor, actor_id, ip)` | 改资料/角色/状态 | 内含八道保护，越界抛 `UserError(403)` |
 | `update_password(id, pwd, actor, actor_id, ip)` | 改密 | `token_version +1`，旧会话立即失效 |
 | `list_users()` / `stats()` | 列表 / 统计 | `stats()["warnings"]` 带 GxP 体检告警 |
-| `list_user_audit(...)` | 审计查询 | 只有读，没有改删接口 |
+| `list_user_audit(...)` | 审计查询 | 支持 target / action / start / end / limit / offset |
+| `count_user_audit(...)` | 审计条数 | 与列表同条件，用于分页 |
+| `export_user_audit(...)` | 审计导出 | 不受列表 1000 条限制，上限 5 万 |
 | `bulk_create_users(rows, ...)` | 批量导入 | 返回 `created` / `failed`，逐行报错 |
 
 **鉴权中间件必须校验 tv**，否则改密、禁用、强制下线都踢不掉已签发的 token：
@@ -97,6 +99,8 @@ if not payload or payload["tv"] != db.get_token_version(payload["uid"]):
 
 ## 七、避坑清单
 
+- **审计查询的时间边界要补全**。`at` 存的是 `YYYY-MM-DD HH:MM:SS`，前端只传日期时必须把结束日补成 `23:59:59`，否则 `at <= '2026-11-16'` 会把当天记录整批漏掉。数据层的 `_norm_day()` 已处理，自己写查询时别忘。
+- **导出必须自己留痕**。`audit_export` 这条记录不是可选项——导出不留痕，等于允许任何人把操作记录导走再清场。
 - **不要自己做命令行解锁/改密工具**。不需要登录就能改账号状态的入口，在 GxP 审计里等同于后门，会被判定为"存在绕过访问控制的手段"。唯一管理员被锁的正解是等锁定到期，或者用第二个管理员解锁——这也是"至少两个管理员"的实际意义。
 - **不要给 `data/` 开公网访问**。`users.db` 里是密码哈希，虽然推不出明文，但拿到库的人可以用字典离线比对。
 - **默认密码必须和强制改密绑在一起**。单用默认密码、不强制改，等于全公司同一个口令。

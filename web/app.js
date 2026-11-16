@@ -29,7 +29,8 @@
     user_kick: { label: "强制下线", cls: "" },
     user_lock: { label: "自动锁定", cls: "delete" },
     user_import: { label: "批量导入", cls: "create" },
-    user_export: { label: "导出清单", cls: "" }
+    user_export: { label: "导出清单", cls: "" },
+    audit_export: { label: "导出审计", cls: "" }
   };
 
   var FIELD_LABEL = {
@@ -935,30 +936,71 @@
   }
 
   /* ---------------------------------------------------------- 审计日志 */
+  var AUDIT = { page: 0, size: 50, total: 0 };
+
   function openAudit() {
     openModal("modalAudit");
-    loadAudit();
+    loadAudit(true);
   }
   $("btnAudit").addEventListener("click", openAudit);
-  $("auditRefresh").addEventListener("click", loadAudit);
-  $("auditAction").addEventListener("change", loadAudit);
+  $("auditRefresh").addEventListener("click", function () { loadAudit(true); });
+  $("auditAction").addEventListener("change", function () { loadAudit(true); });
+  $("auditStart").addEventListener("change", function () { loadAudit(true); });
+  $("auditEnd").addEventListener("change", function () { loadAudit(true); });
   $("auditTarget").addEventListener("keydown", function (e) {
-    if (e.key === "Enter") { e.preventDefault(); loadAudit(); }
+    if (e.key === "Enter") { e.preventDefault(); loadAudit(true); }
+  });
+  $("auditReset").addEventListener("click", function () {
+    $("auditAction").value = "";
+    $("auditTarget").value = "";
+    $("auditStart").value = "";
+    $("auditEnd").value = "";
+    loadAudit(true);
+  });
+  $("auditPrev").addEventListener("click", function () {
+    if (AUDIT.page > 0) { AUDIT.page--; loadAudit(false); }
+  });
+  $("auditNext").addEventListener("click", function () {
+    var pages = Math.max(1, Math.ceil(AUDIT.total / AUDIT.size));
+    if (AUDIT.page < pages - 1) { AUDIT.page++; loadAudit(false); }
   });
 
-  function loadAudit() {
-    var qs = "?limit=200";
-    if ($("auditAction").value) qs += "&action=" + encodeURIComponent($("auditAction").value);
-    if ($("auditTarget").value.trim()) qs += "&target=" + encodeURIComponent($("auditTarget").value.trim());
+  function auditFilters() {
+    var parts = [];
+    var a = $("auditAction").value;
+    var t = $("auditTarget").value.trim();
+    var s = $("auditStart").value;
+    var e = $("auditEnd").value;
+    if (a) parts.push("action=" + encodeURIComponent(a));
+    if (t) parts.push("target=" + encodeURIComponent(t));
+    if (s) parts.push("start=" + encodeURIComponent(s));
+    if (e) parts.push("end=" + encodeURIComponent(e));
+    return parts.join("&");
+  }
+
+  function renderAuditPager() {
+    var pages = Math.max(1, Math.ceil(AUDIT.total / AUDIT.size));
+    $("auditPageInfo").textContent = AUDIT.page + 1 + " / " + pages;
+    $("auditTotal").textContent = "共 " + AUDIT.total + " 条" +
+      (auditFilters() ? "（已筛选）" : "");
+    $("auditPrev").disabled = AUDIT.page <= 0;
+    $("auditNext").disabled = AUDIT.page >= pages - 1;
+  }
+
+  function loadAudit(reset) {
+    if (reset) AUDIT.page = 0;
+    var f = auditFilters();
+    var qs = "?limit=" + AUDIT.size + "&offset=" + AUDIT.page * AUDIT.size + (f ? "&" + f : "");
     $("auditRows").innerHTML = '<tr><td colspan="6" class="muted" style="padding:22px">加载中…</td></tr>';
     api("/api/users/audit" + qs).then(function (d) {
       var rows = d.audit || [];
+      AUDIT.total = d.total || 0;
       $("auditEmpty").classList.toggle("hidden", rows.length > 0);
       $("auditRows").innerHTML = rows.map(function (r) {
         var a = ACTIONS[r.action] || { label: r.action, cls: "" };
         return (
           "<tr>" +
-            '<td class="time-cell">' + esc((r.at || "").slice(5, 16)) + "</td>" +
+            '<td class="time-cell">' + esc((r.at || "").slice(0, 16)) + "</td>" +
             "<td>" + esc(r.actor || "系统") + "</td>" +
             '<td><span class="act-tag ' + a.cls + '">' + esc(a.label) + "</span></td>" +
             '<td class="mono">' + esc(r.target || "—") + "</td>" +
@@ -967,10 +1009,38 @@
           "</tr>"
         );
       }).join("");
+      renderAuditPager();
     }).catch(function (e) {
       $("auditRows").innerHTML = '<tr><td colspan="6" class="err-text" style="padding:18px">' + esc(e.message) + "</td></tr>";
+      $("auditEmpty").classList.add("hidden");
     });
   }
+
+  $("auditExport").addEventListener("click", function () {
+    var btn = this;
+    btn.disabled = true;
+    var f = auditFilters();
+    fetch("/api/users/audit/export" + (f ? "?" + f : ""), {
+      headers: { Authorization: "Bearer " + STATE.token }
+    })
+      .then(function (resp) {
+        if (!resp.ok) throw new Error("导出失败（HTTP " + resp.status + "）");
+        return resp.blob();
+      })
+      .then(function (blob) {
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "audit_" + todayStr().replace(/-/g, "") + ".csv";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 3000);
+        toast("审计日志已导出（本次导出已留痕）", "success");
+        loadAudit(true);
+      })
+      .catch(function (e) { toast(e.message, "error"); })
+      .then(function () { btn.disabled = false; });
+  });
 
   function fmtVal(key, v) {
     if (key === "enabled") return v ? "启用" : "禁用";
@@ -989,6 +1059,7 @@
     var oldV = r.old, newV = r.new;
     if (!oldV && newV) {
       if (newV.created) return '<span class="diff-plain">新增 ' + newV.created.length + " 个账号：" + esc(newV.created.join("、")) + "</span>";
+      if (newV.exported !== undefined) return '<span class="diff-plain">导出 ' + newV.exported + " 条记录</span>";
       var parts = [];
       ["role", "enabled", "expires_at"].forEach(function (k) {
         if (newV[k] !== undefined) parts.push(FIELD_LABEL[k] + " " + fmtVal(k, newV[k]));
@@ -1063,7 +1134,7 @@
         var diff = diffHtml(r).replace(/^<div class="diff">/, "").replace(/<\/div>$/, "");
         return (
           "<tr>" +
-            '<td class="time-cell">' + esc((r.at || "").slice(5, 16)) + "</td>" +
+            '<td class="time-cell">' + esc((r.at || "").slice(0, 16)) + "</td>" +
             '<td><span class="act-tag ' + a.cls + '">' + esc(a.label) + "</span></td>" +
             "<td>" + diff + "</td>" +
             '<td class="mono">' + esc(r.ip || "—") + "</td>" +

@@ -220,6 +220,53 @@ def main():
         check("审计不可删除（触发器）", True)
     conn.close()
 
+    # ---------------------------------------------------------- 审计筛选 / 分页 / 导出
+    print("\n[10.5] 审计筛选 / 分页 / 导出")
+    base_total = db.count_user_audit()
+    check("计数与列表一致", base_total == len(db.list_user_audit(limit=1000)),
+          "%d vs %d" % (base_total, len(db.list_user_audit(limit=1000))))
+
+    page1 = db.list_user_audit(limit=2, offset=0)
+    page2 = db.list_user_audit(limit=2, offset=2)
+    check("分页每页条数正确", len(page1) == 2 and len(page2) == 2)
+    check("分页不重叠", not ({r["id"] for r in page1} & {r["id"] for r in page2}))
+    check("按 id 倒序", page1[0]["id"] > page1[1]["id"])
+
+    upd_only = db.list_user_audit(action="user_update", limit=100)
+    check("按动作筛选且计数一致",
+          all(r["action"] == "user_update" for r in upd_only)
+          and len(upd_only) == db.count_user_audit(action="user_update"))
+
+    # 造一条 40 天前的记录：审计表只禁 UPDATE/DELETE，INSERT 允许
+    from datetime import datetime as _dt, timedelta as _td
+    past_dt = _dt.now() - _td(days=40)
+    past_day = past_dt.strftime("%Y-%m-%d")
+    conn2 = sqlite3.connect(path)
+    conn2.execute(
+        """INSERT INTO user_audit (at, actor_id, actor, action, target_id, target,
+               old_value, new_value, ip, result, note)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+        (past_dt.strftime("%Y-%m-%d %H:%M:%S"), admin["id"], "admin", "user_update",
+         None, "timeline", '{"role":"viewer"}', '{"role":"operator"}', "1.1.1.1", "ok", "时间范围测试"),
+    )
+    conn2.commit()
+    conn2.close()
+
+    today = _dt.now().strftime("%Y-%m-%d")
+    check("结束日传纯日期时含当天全部时段",
+          db.count_user_audit(start=today, end=today) == base_total,
+          "期望 %d，实际 %d" % (base_total, db.count_user_audit(start=today, end=today)))
+    check("能按历史日期命中", db.count_user_audit(start=past_day, end=past_day) == 1)
+    check("时间范围外的记录不带入", db.count_user_audit(start=today) == base_total)
+    check("带时间的边界可精确过滤",
+          db.count_user_audit(start=past_day + " 00:00:00", end=past_day + " 23:59:59") == 1)
+
+    exp_all = db.export_user_audit()
+    check("导出不受列表 1000 条限制", len(exp_all) == base_total + 1)
+    check("导出按时间正序", exp_all[0]["id"] < exp_all[-1]["id"])
+    check("导出支持同样的筛选条件",
+          len(db.export_user_audit(action="user_update")) == db.count_user_audit(action="user_update"))
+
     # ---------------------------------------------------------- 批量导入
     print("\n[11] 批量导入")
     res = db.bulk_create_users(

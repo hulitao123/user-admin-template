@@ -23,11 +23,73 @@ from urllib.parse import parse_qs, unquote, urlparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from auth import TokenSigner  # noqa: E402
-from userstore import ROLE_LEVELS, UserError, UserStore  # noqa: E402
+from userstore import ROLE_LEVELS, ROLE_META, UserError, UserStore  # noqa: E402
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEB_DIR = os.path.join(BASE_DIR, "web")
 DATA_DIR = os.path.join(BASE_DIR, "data")
+
+ROLE_LABELS = {r["key"]: r["label"] for r in ROLE_META}
+
+# 导出 CSV 用：给检查官看的表，动作必须是中文
+ACTION_LABELS = {
+    "user_create": "新增用户",
+    "user_update": "修改资料",
+    "user_reset_password": "重置密码",
+    "password_change": "修改密码",
+    "user_delete": "删除用户",
+    "user_unlock": "解除锁定",
+    "user_kick": "强制下线",
+    "user_lock": "自动锁定",
+    "user_import": "批量导入",
+    "user_export": "导出清单",
+    "audit_export": "导出审计",
+}
+
+FIELD_LABELS = {
+    "role": "角色",
+    "enabled": "状态",
+    "display_name": "显示名",
+    "expires_at": "有效期",
+    "password": "密码",
+    "must_change_pwd": "首登改密",
+}
+
+
+def audit_change_text(old, new) -> str:
+    """把 old/new 快照压成一行人话，供 CSV 用。密码永远不出现明文。"""
+    if not old and not new:
+        return ""
+    keys = []
+    for src in (new or {}, old or {}):
+        for k in src:
+            if k not in keys:
+                keys.append(k)
+
+    def fmt(key, val):
+        if val is None:
+            return "—"
+        if key == "password":
+            return "已变更"
+        if key == "role":
+            return ROLE_LABELS.get(val, val)
+        if key == "enabled":
+            return "启用" if val else "禁用"
+        if key == "must_change_pwd":
+            return "是" if val else "否"
+        return str(val)
+
+    parts = []
+    for k in keys:
+        if k not in (old or {}) and k in (new or {}):
+            parts.append("%s: %s" % (FIELD_LABELS.get(k, k), fmt(k, new[k])))
+        else:
+            parts.append(
+                "%s: %s → %s"
+                % (FIELD_LABELS.get(k, k), fmt(k, (old or {}).get(k)), fmt(k, (new or {}).get(k)))
+            )
+    return "；".join(parts)
+
 
 
 # --------------------------------------------------------------------- 路由表
@@ -42,6 +104,7 @@ ROUTES = [
     ("GET", r"^/api/users$", "list_users", "admin"),
     ("POST", r"^/api/users$", "create_user", "admin"),
     ("GET", r"^/api/users/audit$", "audit", "admin"),
+    ("GET", r"^/api/users/audit/export$", "audit_export", "admin"),
     ("GET", r"^/api/users/export$", "export_csv", "admin"),
     ("POST", r"^/api/users/import$", "import_users", "admin"),
     ("PUT", r"^/api/users/(\d+)$", "update_user", "admin"),
@@ -212,13 +275,62 @@ class Api:
         return 200, {"ok": True, "token": token, "user": self._public_user(user)}
 
     # ---------------------------------------------------------------- 审计 / 导出 / 导入
+    @staticmethod
+    def _audit_cond(query) -> dict:
+        q = lambda k: (query.get(k) or [""])[0].strip()  # noqa: E731
+        return {"target": q("target"), "action": q("action"), "start": q("start"), "end": q("end")}
+
     def audit(self, body, headers, ip, ctx, query):
+        cond = self._audit_cond(query)
         rows = self.db.list_user_audit(
-            target=(query.get("target") or [""])[0],
-            action=(query.get("action") or [""])[0],
-            limit=(query.get("limit") or ["200"])[0],
+            limit=(query.get("limit") or ["50"])[0],
+            offset=(query.get("offset") or ["0"])[0],
+            **cond,
         )
-        return 200, {"ok": True, "audit": rows}
+        total = self.db.count_user_audit(**cond)
+        return 200, {"ok": True, "audit": rows, "total": total}
+
+    def audit_export(self, body, headers, ip, ctx, query):
+        cond = self._audit_cond(query)
+        rows = self.db.export_user_audit(**cond)
+        buf = io.StringIO()
+        buf.write("\ufeff")  # Excel 打开中文不乱码
+        buf.write("时间,操作人,动作,对象,变更,IP,结果,备注\n")
+        for r in rows:
+            buf.write(
+                ",".join(
+                    csv_cell(v)
+                    for v in [
+                        r["at"],
+                        r["actor"],
+                        ACTION_LABELS.get(r["action"], r["action"]),
+                        r["target"],
+                        audit_change_text(r["old"], r["new"]),
+                        r["ip"],
+                        "成功" if r["result"] == "ok" else r["result"],
+                        r["note"],
+                    ]
+                )
+                + "\n"
+            )
+        # 导出审计这件事本身必须留痕，否则"谁把操作记录导走了"无从追溯
+        cond_text = " ".join("%s=%s" % (k, v) for k, v in cond.items() if v) or "全部"
+        self.db.audit_user_change(
+            action="audit_export",
+            actor=ctx["user"]["username"],
+            actor_id=ctx["user"]["id"],
+            target_id=None,
+            target="%d 条审计记录" % len(rows),
+            old=None,
+            new={"exported": len(rows)},
+            ip=ip,
+            note="导出审计日志 CSV（筛选：%s）" % cond_text,
+        )
+        name = "audit_" + datetime.now().strftime("%Y%m%d_%H%M") + ".csv"
+        return 200, buf.getvalue().encode("utf-8"), (
+            "text/csv; charset=utf-8",
+            f'attachment; filename="{name}"',
+        )
 
     def export_csv(self, body, headers, ip, ctx):
         rows = self.db.list_users()
@@ -281,6 +393,13 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write("[%s] %s\n" % (datetime.now().strftime("%H:%M:%S"), fmt % args))
 
     def _send(self, status: int, payload=None, content_type="application/json; charset=utf-8", extra=None):
+        # 允许调用方用 (content_type, content_disposition) 二元组简写下载响应，
+        # 否则整个元组会被当成 Content-Type 字符串发出去，下载头失效。
+        if isinstance(content_type, (tuple, list)):
+            parts = tuple(content_type)
+            content_type = parts[0]
+            if len(parts) > 1 and parts[1] and not extra:
+                extra = {"Content-Disposition": parts[1]}
         if isinstance(payload, (dict, list)):
             data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         elif isinstance(payload, bytes):
@@ -376,7 +495,7 @@ class Handler(BaseHTTPRequestHandler):
                 args = []
                 if handler_name in ("update_user", "delete_user", "unlock_user", "kick_user"):
                     args = [int(match.group(1))]
-                elif handler_name in ("audit", "my_audit"):
+                elif handler_name in ("audit", "my_audit", "audit_export"):
                     args = [query]
                 if required is None:
                     result = fn(body, self.headers, ip)

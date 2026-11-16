@@ -954,9 +954,23 @@ class UserStore:
                 ),
             )
 
-    def list_user_audit(self, target: str | None = None, action: str | None = None, limit: int = 200):
-        limit = max(1, min(int(limit or 200), 1000))
-        sql = "SELECT * FROM user_audit WHERE 1=1"
+    @staticmethod
+    def _norm_day(value, end_of_day: bool = False):
+        """把纯日期补成完整时间边界。
+
+        `at` 列存的是 "YYYY-MM-DD HH:MM:SS"。若用户只选到日（10 位），
+        结束日必须补成 23:59:59，否则 `at <= '2026-11-16'` 会把当天全部漏掉。
+        """
+        v = (value or "").strip()
+        if not v:
+            return None
+        if len(v) == 10 and v[4] == "-" and v[7] == "-":
+            return v + (" 23:59:59" if end_of_day else " 00:00:00")
+        return v
+
+    def _audit_filter(self, target=None, action=None, start=None, end=None):
+        """审计列表、计数、导出共用同一套条件，避免三处口径不一致。"""
+        sql = " WHERE 1=1"
         args: list = []
         if target:
             sql += " AND (target LIKE ? OR actor LIKE ?)"
@@ -964,11 +978,51 @@ class UserStore:
         if action:
             sql += " AND action=?"
             args.append(action)
-        sql += " ORDER BY id DESC LIMIT ?"
-        args.append(limit)
+        s = self._norm_day(start)
+        if s:
+            sql += " AND at >= ?"
+            args.append(s)
+        e = self._norm_day(end, end_of_day=True)
+        if e:
+            sql += " AND at <= ?"
+            args.append(e)
+        return sql, args
+
+    def list_user_audit(
+        self,
+        target: str | None = None,
+        action: str | None = None,
+        limit: int = 200,
+        offset: int = 0,
+        start: str | None = None,
+        end: str | None = None,
+    ):
+        """分页查询。limit 上限 1000 是接口保护，防止一次把审计表拉爆。"""
+        limit = max(1, min(int(limit or 200), 1000))
+        offset = max(0, int(offset or 0))
+        where, args = self._audit_filter(target, action, start, end)
+        sql = "SELECT * FROM user_audit" + where + " ORDER BY id DESC LIMIT ? OFFSET ?"
         with self._conn() as conn:
-            rows = conn.execute(sql, args).fetchall()
+            rows = conn.execute(sql, args + [limit, offset]).fetchall()
         return self._map_audit(rows)
+
+    def count_user_audit(self, target=None, action=None, start=None, end=None) -> int:
+        where, args = self._audit_filter(target, action, start, end)
+        with self._conn() as conn:
+            row = conn.execute("SELECT COUNT(*) AS c FROM user_audit" + where, args).fetchone()
+        return int(row["c"] or 0) if row else 0
+
+    def export_user_audit(
+        self, target=None, action=None, start=None, end=None, max_rows: int = 50000
+    ):
+        """导出用：不受列表 1000 条限制，但保留 5 万条上限兜底。"""
+        max_rows = max(1, min(int(max_rows or 50000), 200000))
+        where, args = self._audit_filter(target, action, start, end)
+        sql = "SELECT * FROM user_audit" + where + " ORDER BY id ASC LIMIT ?"
+        with self._conn() as conn:
+            rows = conn.execute(sql, args + [max_rows]).fetchall()
+        return self._map_audit(rows)
+
 
     def list_audit_for_user(self, user_id: int, limit: int = 50):
         """只返回跟这个人相关的记录：他做的、以及别人对他做的。"""

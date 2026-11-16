@@ -36,7 +36,7 @@ python tests/selftest.py        # 模式 A
 python user_auth/selftest.py    # 模式 B
 ```
 
-76 项全绿再写业务代码。它不依赖 Web 层，纯数据层跑，几秒钟出结果。
+88 项全绿再写业务代码。它不依赖 Web 层，纯数据层跑，几秒钟出结果。
 
 ### 三层可分别替换
 
@@ -160,7 +160,7 @@ python app/server.py --reset         # 清库重来
 │  ├─ index.html       登录 + 个人中心 + 用户管理 + 4 个弹窗
 │  ├─ style.css
 │  └─ app.js
-├─ tests/selftest.py   76 项自检，不依赖 Web 框架
+├─ tests/selftest.py   88 项自检，不依赖 Web 框架
 ├─ data/users.db       SQLite（首次启动自动生成，不进版本库）
 └─ run.bat
 ```
@@ -181,8 +181,9 @@ python app/server.py --reset         # 清库重来
 | POST | `/api/users` | admin | 新增 |
 | PUT | `/api/users/<id>` | admin | 改资料/角色/启停/有效期/重置密码（五合一） |
 | DELETE | `/api/users/<id>` | admin | 删除 |
-| GET | `/api/users/audit` | admin | 全量审计，支持 target / action / limit |
-| GET | `/api/users/export` | admin | 导出 CSV（BOM，Excel 不乱码，不含密码） |
+| GET | `/api/users/audit` | admin | 审计查询，支持 target / action / start / end / limit / offset，返回 `total` |
+| GET | `/api/users/audit/export` | admin | 导出审计 CSV（同样的筛选条件，不传条件=全量，**导出动作本身记入审计**） |
+| GET | `/api/users/export` | admin | 导出账号清单 CSV（BOM，Excel 不乱码，不含密码） |
 | POST | `/api/users/import` | admin | 批量导入 |
 | POST | `/api/users/<id>/unlock` | admin | 解除锁定 |
 | POST | `/api/users/<id>/kick` | admin | 强制下线 |
@@ -302,6 +303,27 @@ python tests/selftest.py -v     # 逐步输出
 - SQLite 触发器兜底：`UPDATE` / `DELETE` 直接 `RAISE(ABORT)`，应用层也改不了
 - 每条都带 IP（反代后请覆盖成真实来源）
 - 普通用户只能看自己的记录（`actor_id` 或 `target_id` 命中自己）
+
+### 查询：按动作 + 人 + 时间范围
+
+四个条件可任意组合，服务端分页，一次 50 条：
+
+| 参数 | 含义 | 说明 |
+|---|---|---|
+| `action` | 动作类型 | 精确匹配 |
+| `target` | 账号 / 操作人 | 模糊匹配，两个字段都查 |
+| `start` / `end` | 时间范围 | 可只传日期，**结束日自动补到 23:59:59**，否则当天记录会整批漏掉 |
+| `limit` / `offset` | 分页 | `limit` 上限 1000，是接口保护，不是数据上限 |
+
+响应带 `total`，前端据此算页数。
+
+### 导出：给检查官的那份材料
+
+`GET /api/users/audit/export` 走同一套筛选条件，不传条件就是全量。产出是带 BOM 的 UTF-8 CSV，Excel 打开不乱码，动作和字段名都是中文（`角色: 浏览者 → 操作员`），密码只写「已变更」。
+
+**导出这个动作本身会写一条 `audit_export` 审计**，记录导了多少条、筛选条件是什么。理由很直接：如果导出不留痕，任何人都能把全部操作记录导走再删掉现场，审计就失去意义。
+
+> 导出上限 5 万条（`export_user_audit(max_rows=...)`）。真要导更多，按时间分段导，别一次拉全库。
 
 ---
 

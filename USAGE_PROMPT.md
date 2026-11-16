@@ -40,8 +40,8 @@ python <临时目录>/scripts/init.py --target <本项目根目录> --mode core
 
 【第 4 步 · 必须先验证，全绿才继续】
 
-full：python tests/selftest.py          期望 76/76 通过
-core：python user_auth/selftest.py      期望 76/76 通过
+full：python tests/selftest.py          期望 88/88 通过
+core：python user_auth/selftest.py      期望 88/88 通过
 
 不通过就停下报错，不要跳过自检继续写业务代码。
 
@@ -75,7 +75,7 @@ core：python user_auth/selftest.py      期望 76/76 通过
 
 【完成的标志】
 
-- 自检 76/76 通过
+- 自检 88/88 通过
 - 能用初始账号登录，且被强制改密
 - 普通角色登录后看不到用户管理菜单，直接调 /api/users* 返回 403
 ```
@@ -88,7 +88,7 @@ core：python user_auth/selftest.py      期望 76/76 通过
 |---|---|
 | 先判断模式 | 避免在 FastAPI 项目里直接铺一套完整后台 |
 | clone 到临时目录 | 避免模板的 git 历史跟着进项目 |
-| 强制跑自检 | 76 项覆盖八道保护和审计，改坏了当场暴露 |
+| 强制跑自检 | 88 项覆盖八道保护和审计，改坏了当场暴露 |
 | 校验 tv | 这是最容易漏、后果最严重的一条，漏了会话撤销就是摆设 |
 | 禁止改 userstore.py | 业务代码越界改数据层，是这类底座被搞坏的常见原因 |
 | 禁止命令行解锁 | 曾经加过又删掉的开关，属于绕过访问控制 |
